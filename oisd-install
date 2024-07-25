@@ -238,11 +238,11 @@ main() {
 	fi
 
 	# figure out the endpoint for the url - abp is the default
-	endpoint=$syntax
+	local endpoint=$syntax
 	if [[ $syntax == 'abp' ]]; then
 		endpoint=''
 	fi
-	url="https://$typ.oisd.nl/$endpoint"
+	local url="https://$typ.oisd.nl/$endpoint"
 
 	# pull the file to a temp location
 	local tmp
