@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+#
+# Check all valid syntax types
+#
+# Author: Dave Eddy <dave@daveeddy.com>
+# Date: July 17, 2024
+# License: MIT
+
+. ../oisd-install || exit 1
+
+code=0
+for file in valid/*; do
+	syntax=${file##*/}
+	echo -n "checking ${YELLOW}$syntax${RESET}... "
+	if validate "$file" "$syntax"; then
+		echo "${GREEN}valid${RESET}"
+	else
+		code=1
+	fi
+done
+
+exit "$code"

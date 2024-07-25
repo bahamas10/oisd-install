@@ -1,0 +1,16 @@
+[Adblock Plus]
+! Version: 202407171807
+! Title: oisd small
+! Description: Block. Don't break.
+! Syntax: Adblock Plus Filter List
+! Entries: 45273
+! Last modified: 2024-07-17T18:07:15+0000
+! Expires: 1 hours
+! License: https://github.com/sjhgvr/oisd/blob/main/LICENSE
+! Maintainer: Stephan van Ruth
+! Homepage: https://oisd.nl
+! Contact: contact@oisd.nl
+
+||0-02.net^
+||0.101tubeporn.com^
+||0.code.cotsta.ru^

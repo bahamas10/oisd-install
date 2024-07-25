@@ -1,0 +1,308 @@
+#!/usr/bin/env bash
+#
+# Install host lists from https://oisd.nl
+#
+# This script will do the following things in order:
+#
+#   1. Pull the requested host list (to a temp location).
+#   2. Validate the requested host list.
+#   3. Check for a difference between the existing and new host lists.
+#   4a.  If no difference (we pulled the same file) then exit.
+#   4b.  If difference (we pulled a new file) atomaically `mv` the file into
+#        place and then optionally run the given command by the user
+#
+# Author: Dave Eddy <dave@daveeddy.com>
+# Date: July 17, 2024
+# License: MIT
+
+# Print the help message
+usage() {
+	local prog=${0##*/}
+	cat <<-EOF
+	Pull, validate, and install a host list from \
+${YELLOW}https://oisd.nl${RESET}.
+
+	${YELLOW}Usage:${RESET}
+	     ${GREEN}$prog -t type -s syntax /path/to/file.conf \
+[-- cmd to run]${RESET}
+
+	${YELLOW}Examples:${RESET}
+	    Pull the small host list in adblock plus syntax and save it:
+
+	        ${GREEN}$ $prog -t small -s abp /etc/abp/list.conf${RESET}
+
+	    Pull the big host list in unbound syntax and save it:
+
+	        ${GREEN}$ $prog -t big -s unbound /etc/unbound/list.conf${RESET}
+
+	    Pull the same as above but set the given metadata on the file:
+
+	        ${GREEN}$ $prog -t big -s unbound -o root -g wheel -m 644 \
+./list.conf${RESET}
+
+	    Pull the big host list in dnsmasq2 syntax, save it, and restart the
+	    dnsmasq service if the file was different:
+
+	        ${GREEN}$ $prog -t big -s dnsmasq2 /var/list.conf -- \
+svc restart dnsmasq${RESET}
+
+	${YELLOW}Options:${RESET}
+	  ${GREEN}-t <type>    ${RESET}The filetype to pull, choices are \
+small, big, or nsfw.
+	  ${GREEN}-s <syntax>  ${RESET}The file syntax to pull, choices \
+are dnsmasq, unbound, rpz, etc.
+	  ${GREEN}-m <mode>    ${RESET}The permissions to set on the file, \
+passed directly to ${YELLOW}chmod${RESET}.
+	  ${GREEN}-o <owner>   ${RESET}The owner to set on the file, \
+passed directly to ${YELLOW}chown${RESET}.
+	  ${GREEN}-g <group>   ${RESET}The group to set on the file, \
+passed directly to ${YELLOW}chgrp${RESET}.
+	  ${GREEN}-h           ${RESET}Print this message and exit.
+
+	${YELLOW}Arguments:${RESET}
+	  ${GREEN}arg 1        ${RESET}[Required] The path to install the host \
+list once pulled.
+	  ${GREEN}             ${RESET}and validated, for example: \
+${YELLOW}/etc/dnsmasq/oisd-host-list.conf${RESET}.
+	  ${GREEN}extra        ${RESET}Any arguments will be processed as a \
+command to run if
+	  ${GREEN}             ${RESET}the pull was successful and the new \
+file is different than
+	  ${GREEN}             ${RESET}the previous file. The string \
+${YELLOW}--${RESET} must preceed the command.
+
+	EOF
+}
+
+# Print an error message and exit
+fatal() {
+	echo "${RED}[error]${RESET}" "$@" >&2
+	exit 1
+}
+
+# Download a URL to a given file path
+#
+# This is a wrapper around curl or wget so we can use whatever program the
+# caller has available
+get-url() {
+	local url=$1
+	local file=$2
+
+	if command -v curl &>/dev/null; then
+		curl -o "$file" "$url"
+	elif command -v wget &>/dev/null; then
+		wget -O "$file" "$url"
+	else
+		fatal 'no suitable command found for downloading a URL'
+	fi
+}
+
+# Validate a given file with the given syntax
+#
+# This function just dispatches the appropriate underlying validate-* function
+validate() {
+	local file=$1
+	local syntax=$2
+
+	case "$syntax" in
+		abp) validate-abp < "$file";;
+		dnsmasq) validate-dnsmasq < "$file";;
+		dnsmasq2) validate-dnsmasq2 < "$file";;
+		domainswild) validate-domainswild < "$file";;
+		domainswild2) validate-domainswild2 < "$file";;
+		rpz) validate-rpz < "$file";;
+		simplednsplusdblpi) validate-simplednsplusdblpi < "$file";;
+		unbound) validate-unbound < "$file";;
+		*) fatal "no validate found for syntax $syntax"
+	esac
+}
+
+# Validate an `abp` syntax file
+validate-abp() {
+	_validate-regex '!' '^(\[Adblock Plus\]|\|\|[a-z0-9.-]+\^)$'
+}
+
+# Validate a `dnsmasq` syntax file
+validate-dnsmasq() {
+	_validate-regex '#' '^server=/[^/]+/$'
+}
+
+# Validate a `dnsmasq2` syntax file
+validate-dnsmasq2() {
+	_validate-regex '#' '^local=/[^/]+/$'
+}
+
+# Validate a `domainswild` syntax file
+validate-domainswild() {
+	_validate-regex '#' '^\*\.[a-z0-9.-]+$'
+}
+
+# Validate a `domainswild2` syntax file
+validate-domainswild2() {
+	_validate-regex '#' '^[a-z0-9.-]+$'
+}
+
+# Validate a `simplednsplusdblpi` syntax file
+validate-simplednsplusdblpi() {
+	_validate-regex '#' '^E [a-z0-9.-]+$'
+}
+
+# Validate an `unbound` syntax file
+validate-unbound() {
+	_validate-regex '#' '^(server:|local-zone: "[a-z0-9.-]+\." always_null)$'
+}
+
+# Validate an `rpz` syntax file
+validate-rpz() {
+	# shellcheck disable=SC2016
+	local valid=(
+		'\$TTL .*'
+		'@ IN SOA rpz\.oisd\.nl\. .*'
+		' NS localhost\.'
+		'(\*\.)?[a-z0-9.-]+ CNAME \.'
+	)
+
+	# create the regex by joining the strings with pipes
+	local joined
+	joined=$(IFS='|'; echo "${valid[*]}")
+
+	_validate-regex ';' "^($joined)$"
+}
+
+# Generic function to validate a given file over stdin by:
+#
+# 1. Filtering out blank lines, and lines that start with the comment char
+# 2. Looking for lines that match the given regex only
+#
+# $1 - The character that denotes a comment in the incoming stream
+# $2 - The regex to validate each input line against
+_validate-regex() {
+	local comment=$1
+	local regex=$2
+
+	local line
+	while IFS= read -r line || [[ -n $line ]]; do
+		# skip blank lines
+		[[ -n $line ]] || continue
+
+		# skip comments
+		[[ ${line:0:1} == "$comment" ]] && continue
+
+		# validate lines
+		if ! [[ $line =~ $regex ]]; then
+			echo "line '$line' invalid"
+			return 1
+		fi
+	done
+
+	return 0
+}
+
+# The main script entrypoint
+main() {
+	# parse arguments
+	local typ
+	local syntax
+	local owner
+	local group
+	local mode
+	local opt
+	local OPTIND OPTARG
+	while getopts 'hg:m:s:t:o:' opt; do
+		case "$opt" in
+			h) usage; exit 0;;
+			g) group=$OPTARG;;
+			m) mode=$OPTARG;;
+			o) owner=$OPTARG;;
+			s) syntax=$OPTARG;;
+			t) typ=$OPTARG;;
+			*) usage >&2; exit 1;;
+		esac
+	done
+	shift "$((OPTIND - 1))"
+	local file=$1
+	shift
+
+	# ensure arguments are what we expect
+	[[ -n $typ ]] || fatal '-t required'
+	[[ -n $syntax ]] || fatal '-s required'
+	[[ -n $file ]] || fatal 'output file required'
+
+	local finalcmd=
+	if [[ -n $1 && $1 != '--' ]]; then
+		fatal 'must specify -- to set command arguments'
+	elif [[ -n $1 && $1 == '--' ]]; then
+		shift
+		[[ -n $1 ]] || fatal 'final command must be specified after --'
+		finalcmd=("$@")
+	fi
+
+	# figure out the endpoint for the url - abp is the default
+	endpoint=$syntax
+	if [[ $syntax == 'abp' ]]; then
+		endpoint=''
+	fi
+	url="https://$typ.oisd.nl/$endpoint"
+
+	# pull the file to a temp location
+	local tmp
+	tmp=$(mktemp "/tmp/oisd.$$.XXXX") || fatal 'failed to make temp file'
+	echo "> downloading ${GREEN}$url${RESET} to ${YELLOW}$tmp${RESET}"
+	get-url "$url" "$tmp" || fatal "failed to GET $url"
+
+	# validate file
+	echo -n "> validating ${YELLOW}$tmp${RESET} with" \
+	    "${YELLOW}$syntax${RESET} syntax... "
+
+	[[ -s $tmp ]] || fatal "file $tmp is empty"
+	validate "$tmp" "$syntax" || fatal "failed to validate $tmp ($syntax)"
+	echo "${GREEN}done${RESET}"
+
+	# check if the file is different
+	if cmp -s "$tmp" "$file"; then
+		echo '> no changes detected, exiting'
+		rm -f "$tmp"
+		return 0
+	fi
+
+	# files are different! move file into place
+	echo -n "> moving ${YELLOW}$tmp${RESET} -> ${YELLOW}$file${RESET}... "
+	if [[ -n $owner ]]; then
+		chown "$owner" "$tmp" || fatal "failed to chown $owner $tmp"
+	fi
+	if [[ -n $group ]]; then
+		chgrp "$group" "$tmp" || fatal "failed to chgrp $group $tmp"
+	fi
+	if [[ -n $mode ]]; then
+		chmod "$mode" "$tmp" || fatal "failed to chmod $mode $tmp"
+	fi
+	mv "$tmp" "$file" || fatal "failed to move $tmp -> $file"
+	echo "${GREEN}done${RESET}"
+
+	# run the command if the user supplied one
+	if [[ -n ${finalcmd[0]} ]]; then
+		echo "> running: ${finalcmd[*]}"
+		"${finalcmd[@]}" || fatal 'failed to run command'
+	fi
+
+	# done!
+	echo "> ${GREEN}all done${RESET}"
+	return 0
+}
+
+# colorize output if stdout is a terminal and NO_COLOR is absent
+RED=''
+GREEN=''
+YELLOW=''
+RESET=''
+if [[ -t 1 ]] && [[ -z $NO_COLOR ]]; then
+	RED=$(tput setaf 1)
+	GREEN=$(tput setaf 2)
+	YELLOW=$(tput setaf 3)
+	RESET=$(tput sgr0)
+fi
+
+if ! (return 2>/dev/null); then
+	# we are being called directly - execute the main function
+	main "$@"
+fi
