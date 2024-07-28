@@ -12,9 +12,6 @@ place, and restart dnsmasq:
 ```
 $ oisd-install -t big -s dnsmasq2 /etc/dnsmasq/oisd-hosts.conf -- svcadm -v restart dnsmasq
 > downloading https://big.oisd.nl/dnsmasq2 to /tmp/oisd.54034.eCZA
-  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
-                                 Dload  Upload   Total   Spent    Left  Speed
-100 4740k    0 4740k    0     0  3272k      0 --:--:--  0:00:01 --:--:-- 3271k
 > validating /tmp/oisd.54034.eCZA with dnsmasq2 syntax... done
 > moving /tmp/oisd.54034.eCZA -> /etc/dnsmasq/oisd-hosts.conf... done
 > running: svcadm -v restart dnsmasq
@@ -34,16 +31,13 @@ If we immediately run the script again we get:
 
 ```
 $ oisd-install -t big -s dnsmasq2 /etc/dnsmasq/oisd-hosts.conf -- svcadm -v restart dnsmasq
-> downloading https://big.oisd.nl/dnsmasq2 to /tmp/oisd.54067.MJ5K
-  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
-                                 Dload  Upload   Total   Spent    Left  Speed
-100 4740k    0 4740k    0     0  3267k      0 --:--:--  0:00:01 --:--:-- 3267k
-> validating /tmp/oisd.54067.MJ5K with dnsmasq2 syntax... done
-> no changes detected, exiting
+> downloading https://small.oisd.nl/dnsmasq2 to /tmp/oisd.29780.L8ps
+> no new file found on the server, exiting
 ```
 
-This did step 1 and 2 above but stopped because no file changes were detected -
-leaving the original file intact.
+This exited early because the target file `/etc/dnsmasq/oisd-hosts.conf` existed
+locally, so it's modified-time was sent to the server as the `If-Modified-Since`
+header, which resulted in the server returning a 304 with no actual data.
 
 This script also allows you to set ownership and permissions on the file before
 it is moved into place:
@@ -67,9 +61,11 @@ $ oisd-install -t big -s dnsmasq2 -o root -g wheel -m 644 ./list.conf
 3. The command given after `--` is optional and will only be run if the host
    list file was pulled, validated, and was successfully moved into place i.e.:
    it was different and updated.
-4. This script will attempt to use `curl` to pull the file if it is found,
-   falling back to `wget`, or finally just emitting an error and stopping if
-   neither are available.
+
+Dependencies
+------------
+
+- `curl`
 
 Usage
 -----

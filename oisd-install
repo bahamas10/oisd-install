@@ -5,10 +5,11 @@
 # This script will do the following things in order:
 #
 #   1. Pull the requested host list (to a temp location).
+#     a. Will use `If-Modified-Since` if the target file exists
 #   2. Validate the requested host list.
 #   3. Check for a difference between the existing and new host lists.
-#   4a.  If no difference (we pulled the same file) then exit.
-#   4b.  If difference (we pulled a new file) atomaically `mv` the file into
+#     a. If no difference (we pulled the same file) then exit.
+#     b. If difference (we pulled a new file) atomaically `mv` the file into
 #        place and then optionally run the given command by the user
 #
 # Author: Dave Eddy <dave@daveeddy.com>
@@ -78,23 +79,6 @@ ${YELLOW}--${RESET} must preceed the command.
 fatal() {
 	echo "${RED}[error]${RESET}" "$@" >&2
 	exit 1
-}
-
-# Download a URL to a given file path
-#
-# This is a wrapper around curl or wget so we can use whatever program the
-# caller has available
-get-url() {
-	local url=$1
-	local file=$2
-
-	if command -v curl &>/dev/null; then
-		curl -o "$file" "$url"
-	elif command -v wget &>/dev/null; then
-		wget -O "$file" "$url"
-	else
-		fatal 'no suitable command found for downloading a URL'
-	fi
 }
 
 # Validate a given file with the given syntax
@@ -237,6 +221,14 @@ main() {
 		finalcmd=("$@")
 	fi
 
+	# check dependencies
+	local dep
+	# shellcheck disable=SC2043
+	for dep in curl; do
+		command -v "$dep" &>/dev/null ||
+		    fatal "program '$dep' not found"
+	done
+
 	# figure out the endpoint for the url - abp is the default
 	local endpoint=$syntax
 	if [[ $syntax == 'abp' ]]; then
@@ -244,21 +236,38 @@ main() {
 	fi
 	local url="https://$typ.oisd.nl/$endpoint"
 
+	# check mtime against server to see if an update is available
+	local args=()
+	if [[ -f $file ]]; then
+		args+=('-z' "$file")
+	fi
+
 	# pull the file to a temp location
 	local tmp
 	tmp=$(mktemp "/tmp/oisd.$$.XXXX") || fatal 'failed to make temp file'
 	echo "> downloading ${GREEN}$url${RESET} to ${YELLOW}$tmp${RESET}"
-	get-url "$url" "$tmp" || fatal "failed to GET $url"
+	curl -sSf "${args[@]}" -o "$tmp" "$url" || fatal "failed to GET $url"
 
-	# validate file
+	# if we are here then `curl` ran successfully - we then check the size
+	# of the file to ensure data was pulled.  if the file is 0 bytes here
+	# then we know that the server had nothing new to send us.
+	if [[ -f $tmp && ! -s $tmp ]]; then
+		echo '> no new file found on the server, exiting'
+		rm -f "$tmp"
+		return 0
+	fi
+
+	# if we are here then the file was pulled and has data in it - validate
+	# it
 	echo -n "> validating ${YELLOW}$tmp${RESET} with" \
 	    "${YELLOW}$syntax${RESET} syntax... "
-
-	[[ -s $tmp ]] || fatal "file $tmp is empty"
 	validate "$tmp" "$syntax" || fatal "failed to validate $tmp ($syntax)"
 	echo "${GREEN}done${RESET}"
 
-	# check if the file is different
+	# check if the file is different - because we are using
+	# `if-modified-since` this *shouldn't* ever be the case - this is a
+	# defensive tactic against the server to ensure we act in the way we
+	# expect
 	if cmp -s "$tmp" "$file"; then
 		echo '> no changes detected, exiting'
 		rm -f "$tmp"
