@@ -1,7 +1,7 @@
 .PHONY: check
 check:
-	awk 'length($$0) > 80 { exit(1); }' oisd-install
-	./oisd-install -h | awk 'length($$0) > 80 { exit(1); }'
+	expand oisd-install | awk 'length($$0) > 80 { exit(1); }'
+	./oisd-install -h | expand | awk 'length($$0) > 80 { exit(1); }'
 	shellcheck oisd-install
 
 .PHONY: test

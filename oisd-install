@@ -103,37 +103,37 @@ validate() {
 
 # Validate an `abp` syntax file
 validate-abp() {
-	_validate-regex '!' '^(\[Adblock Plus\]|\|\|[a-z0-9.-]+\^)$'
+	_validate '!' '^(\[Adblock Plus\]|\|\|[a-z0-9.-]+\^)$'
 }
 
 # Validate a `dnsmasq` syntax file
 validate-dnsmasq() {
-	_validate-regex '#' '^server=/[^/]+/$'
+	_validate '#' '^server=/[^/]+/$'
 }
 
 # Validate a `dnsmasq2` syntax file
 validate-dnsmasq2() {
-	_validate-regex '#' '^local=/[^/]+/$'
+	_validate '#' '^local=/[^/]+/$'
 }
 
 # Validate a `domainswild` syntax file
 validate-domainswild() {
-	_validate-regex '#' '^\*\.[a-z0-9.-]+$'
+	_validate '#' '^\*\.[a-z0-9.-]+$'
 }
 
 # Validate a `domainswild2` syntax file
 validate-domainswild2() {
-	_validate-regex '#' '^[a-z0-9.-]+$'
+	_validate '#' '^[a-z0-9.-]+$'
 }
 
 # Validate a `simplednsplusdblpi` syntax file
 validate-simplednsplusdblpi() {
-	_validate-regex '#' '^E [a-z0-9.-]+$'
+	_validate '#' '^E [a-z0-9.-]+$'
 }
 
 # Validate an `unbound` syntax file
 validate-unbound() {
-	_validate-regex '#' '^(server:|local-zone: "[a-z0-9.-]+\." always_null)$'
+	_validate '#' '^(server:|local-zone: "[a-z0-9.-]+\." always_null)$'
 }
 
 # Validate an `rpz` syntax file
@@ -150,7 +150,7 @@ validate-rpz() {
 	local joined
 	joined=$(IFS='|'; echo "${valid[*]}")
 
-	_validate-regex ';' "^($joined)$"
+	_validate ';' "^($joined)$"
 }
 
 # Generic function to validate a given file over stdin by:
@@ -160,7 +160,7 @@ validate-rpz() {
 #
 # $1 - The character that denotes a comment in the incoming stream
 # $2 - The regex to validate each input line against
-_validate-regex() {
+_validate() {
 	local comment=$1
 	local regex=$2
 
